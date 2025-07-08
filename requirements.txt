@@ -1,0 +1,13 @@
+Django==5.0
+openai-whisper
+python-docx
+fuzzywuzzy
+python-Levenshtein
+Pillow
+django-crispy-forms
+crispy-bootstrap5
+pydub
+numpy
+scipy
+librosa
+soundfile 

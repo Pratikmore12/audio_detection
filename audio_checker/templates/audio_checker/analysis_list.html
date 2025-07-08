@@ -1,0 +1,136 @@
+{% extends 'audio_checker/base.html' %}
+
+{% block title %}All Analyses - Audio Accuracy Checker{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <!-- Header -->
+    <div class="row mb-4">
+        <div class="col">
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{% url 'audio_checker:home' %}">Home</a></li>
+                    <li class="breadcrumb-item active">All Analyses</li>
+                </ol>
+            </nav>
+            
+            <div class="d-flex justify-content-between align-items-center">
+                <h1 class="mb-0">
+                    <i class="fas fa-list me-2"></i>All Analyses
+                </h1>
+                <a href="{% url 'audio_checker:home' %}" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i>New Analysis
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analyses List -->
+    {% if page_obj %}
+        <div class="row">
+            {% for analysis in page_obj %}
+            <div class="col-md-6 col-lg-4 mb-4">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <h5 class="card-title mb-0">{{ analysis.title }}</h5>
+                            {% if analysis.accuracy_score is not None %}
+                                <span class="badge bg-success">{{ analysis.accuracy_score|floatformat:1 }}%</span>
+                            {% else %}
+                                <span class="badge bg-warning text-dark">Processing</span>
+                            {% endif %}
+                        </div>
+                        
+                        <div class="mb-3">
+                            <small class="text-muted">
+                                <i class="fas fa-calendar me-1"></i>
+                                {{ analysis.created_at|date:"M d, Y H:i" }}
+                            </small>
+                        </div>
+                        
+                        {% if analysis.accuracy_score is not None %}
+                            <div class="row text-center mb-3">
+                                <div class="col-4">
+                                    <div class="h6 text-primary">{{ analysis.total_words }}</div>
+                                    <small class="text-muted">Total</small>
+                                </div>
+                                <div class="col-4">
+                                    <div class="h6 text-success">{{ analysis.correct_words }}</div>
+                                    <small class="text-muted">Correct</small>
+                                </div>
+                                <div class="col-4">
+                                    <div class="h6 text-danger">{{ analysis.missing_words|add:analysis.wrong_words }}</div>
+                                    <small class="text-muted">Errors</small>
+                                </div>
+                            </div>
+                        {% else %}
+                            <div class="text-center mb-3">
+                                <div class="spinner-border spinner-border-sm text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <small class="text-muted d-block mt-2">Analysis in progress...</small>
+                            </div>
+                        {% endif %}
+                        
+                        <div class="d-grid gap-2">
+                            <a href="{% url 'audio_checker:analysis_detail' analysis.id %}" class="btn btn-outline-primary btn-sm">
+                                <i class="fas fa-eye me-1"></i>View Details
+                            </a>
+                            {% if analysis.accuracy_score is not None %}
+                                <a href="{% url 'audio_checker:download_results' analysis.id %}" class="btn btn-outline-secondary btn-sm">
+                                    <i class="fas fa-download me-1"></i>Download CSV
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Pagination -->
+        {% if page_obj.has_other_pages %}
+        <nav aria-label="Analyses pagination" class="mt-4">
+            <ul class="pagination justify-content-center">
+                {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+                    </li>
+                {% endif %}
+                
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                        <li class="page-item active">
+                            <span class="page-link">{{ num }}</span>
+                        </li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                        </li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+                    </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        
+    {% else %}
+        <!-- Empty State -->
+        <div class="text-center py-5">
+            <div class="mb-4">
+                <i class="fas fa-microphone-slash fa-4x text-muted"></i>
+            </div>
+            <h3 class="text-muted">No analyses yet</h3>
+            <p class="text-muted mb-4">Start by uploading your first script and audio file for analysis.</p>
+            <a href="{% url 'audio_checker:home' %}" class="btn btn-primary btn-lg">
+                <i class="fas fa-plus me-2"></i>Create First Analysis
+            </a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %} 
