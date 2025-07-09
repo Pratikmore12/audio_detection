@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
 from pathlib import Path
+import dj_database_url
 
 # Build paths inside the workspace like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -77,10 +78,11 @@ WSGI_APPLICATION = 'audio_detection.wsgi.application'
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default='postgresql://audio_db_zzrn_user:K1eYNhXWvHUjLCZbNL3IQUJZb9MekcUQ@dpg-d1n6amvdiees73eqi930-a.oregon-postgres.render.com/audio_db_zzrn',
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
 
 

@@ -11,3 +11,5 @@ numpy
 scipy
 librosa
 soundfile 
+
+dj-database-url 
