@@ -23,6 +23,9 @@
                 <a href="{% url 'audio_checker:download_results' analysis.id %}" class="btn btn-outline-primary">
                     <i class="fas fa-download me-2"></i>Download CSV
                 </a>
+                <a href="{% url 'audio_checker:download_transcript_docx' analysis.id %}" class="btn btn-outline-success">
+                    <i class="fas fa-file-word me-2"></i>Download Transcript (DOCX)
+                </a>
                 <a href="{% url 'audio_checker:analysis_list' %}" class="btn btn-outline-secondary">
                     <i class="fas fa-list me-2"></i>View All Analyses
                 </a>

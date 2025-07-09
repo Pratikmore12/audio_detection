@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
@@ -8,6 +8,9 @@ import os
 import threading
 import time
 import logging
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from .models import AudioAnalysis, WordComparison, AnalysisResult
 from .forms import AudioAnalysisForm
@@ -122,6 +125,9 @@ def run_analysis_with_timeout(analysis_id):
                 )
             
             logger.info(f"Analysis {analysis_id} completed successfully in {time.time() - start_time:.1f} seconds")
+            
+            # Clean up files after successful analysis
+            cleanup_analysis_files(analysis)
             
         except Exception as e:
             logger.error(f"Error in analysis {analysis_id}: {e}")
@@ -238,3 +244,91 @@ def download_results(request, analysis_id):
         ])
     
     return response
+
+def download_transcript_docx(request, analysis_id):
+    """Download the transcribed audio as a DOCX file"""
+    analysis = get_object_or_404(AudioAnalysis, id=analysis_id)
+    
+    # Check if analysis has results
+    if analysis.accuracy_score == -1:
+        messages.error(request, 'Analysis failed. No transcript available.')
+        return redirect('audio_checker:analysis_detail', analysis_id=analysis_id)
+    
+    try:
+        # Get the transcribed text
+        transcribed_text = ""
+        try:
+            # Try to get from AnalysisResult first
+            result = analysis.analysisresult
+            transcribed_text = result.transcribed_text
+        except:
+            # Fallback: reconstruct from word comparisons
+            comparisons = analysis.word_comparisons.all()
+            transcribed_text = ' '.join([c.audio_word for c in comparisons if c.audio_word])
+        
+        if not transcribed_text.strip():
+            messages.error(request, 'No transcript available for this analysis.')
+            return redirect('audio_checker:analysis_detail', analysis_id=analysis_id)
+        
+        # Create a new Document
+        doc = Document()
+        
+        # Add title
+        title = doc.add_heading(f'Transcribed Audio: {analysis.title}', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Add analysis info
+        doc.add_paragraph(f'Analysis ID: {analysis.id}')
+        doc.add_paragraph(f'Created: {analysis.created_at.strftime("%Y-%m-%d %H:%M:%S")}')
+        doc.add_paragraph(f'Accuracy Score: {analysis.accuracy_score:.2f}%')
+        doc.add_paragraph(f'Total Words: {analysis.total_words}')
+        doc.add_paragraph(f'Correct Words: {analysis.correct_words}')
+        doc.add_paragraph(f'Missing Words: {analysis.missing_words}')
+        doc.add_paragraph(f'Wrong Words: {analysis.wrong_words}')
+        
+        # Add a separator
+        doc.add_paragraph('')
+        doc.add_paragraph('=' * 50)
+        doc.add_paragraph('')
+        
+        # Add the transcribed text
+        doc.add_heading('Transcribed Text', level=1)
+        
+        # Split text into paragraphs and add them
+        paragraphs = transcribed_text.split('\n')
+        for para in paragraphs:
+            if para.strip():
+                doc.add_paragraph(para.strip())
+        
+        # Create the response
+        response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        response['Content-Disposition'] = f'attachment; filename="transcript_{analysis_id}_{analysis.title.replace(" ", "_")}.docx"'
+        
+        # Save the document to the response
+        doc.save(response)
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error creating DOCX transcript for analysis {analysis_id}: {e}")
+        messages.error(request, 'Error creating transcript file. Please try again.')
+        return redirect('audio_checker:analysis_detail', analysis_id=analysis_id)
+
+def cleanup_analysis_files(analysis):
+    """Delete audio and script files after successful analysis to save storage space"""
+    try:
+        # Delete audio file
+        if analysis.audio_file and os.path.exists(analysis.audio_file.path):
+            os.remove(analysis.audio_file.path)
+            logger.info(f"Deleted audio file: {analysis.audio_file.path}")
+        
+        # Delete script file
+        if analysis.script_file and os.path.exists(analysis.script_file.path):
+            os.remove(analysis.script_file.path)
+            logger.info(f"Deleted script file: {analysis.script_file.path}")
+            
+        logger.info(f"File cleanup completed for analysis {analysis.id}")
+        
+    except Exception as e:
+        logger.error(f"Error during file cleanup for analysis {analysis.id}: {e}")
+        # Don't raise the exception - cleanup failure shouldn't affect the analysis result
