@@ -61,20 +61,15 @@ class AudioAnalyzer:
             logger.error(f"Error extracting text from DOCX: {e}")
             raise
     
-    def transcribe_audio(self, audio_path: str) -> str:
-        """Transcribe audio file using Whisper with optimized settings"""
+    def transcribe_audio(self, audio_path: str):
+        """Transcribe audio file using Whisper with optimized settings and return segments."""
         try:
             start_time = time.time()
-            
-            # Check file size and warn if too large
             file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
             if file_size > 100:
                 logger.warning(f"Large file detected: {file_size:.1f}MB. This may take a long time.")
                 print(f"[WARNING] Large file: {file_size:.1f}MB. Processing may take a long time or fail. For best results, split into smaller chunks.")
-            
-            # Try multiple approaches to avoid ffmpeg issues
             try:
-                # First try: Direct Whisper (might work if ffmpeg is available)
                 logger.info("Attempting direct Whisper transcription")
                 result = self.model.transcribe(
                     audio_path,
@@ -86,27 +81,16 @@ class AudioAnalyzer:
                     temperature=0.0
                 )
                 logger.info("Direct Whisper transcription successful")
-                
             except Exception as direct_error:
                 logger.warning(f"Direct Whisper failed: {direct_error}")
-                
-                # Second try: Use librosa if available
                 try:
                     import librosa
                     import soundfile as sf
-                    
                     logger.info("Using librosa for audio loading")
-                    
-                    # Load audio with librosa and resample to 16kHz
                     audio, sr = librosa.load(audio_path, sr=16000)
-                    
-                    # Save as temporary WAV file for Whisper
                     temp_path = audio_path + "_temp.wav"
                     sf.write(temp_path, audio, sr)
-                    
                     logger.info(f"Created temporary file: {temp_path}")
-                    
-                    # Use the temporary file for transcription
                     result = self.model.transcribe(
                         temp_path,
                         fp16=False,
@@ -116,39 +100,29 @@ class AudioAnalyzer:
                         condition_on_previous_text=False,
                         temperature=0.0
                     )
-                    
-                    # Clean up temporary file
                     try:
                         os.remove(temp_path)
                         logger.info("Cleaned up temporary file")
                     except Exception as cleanup_error:
                         logger.warning(f"Could not clean up temp file: {cleanup_error}")
-                        
                 except Exception as librosa_error:
                     logger.warning(f"librosa failed: {librosa_error}")
-                    
-                    # Third try: Manual audio loading with wave/numpy
                     try:
                         import wave
                         import numpy as np
-                        
                         logger.info("Using manual audio loading with wave/numpy")
-                        
                         with wave.open(audio_path, 'rb') as wav_file:
                             frames = wav_file.getnframes()
                             sample_rate = wav_file.getframerate()
                             audio_data = wav_file.readframes(frames)
                             audio_array = np.frombuffer(audio_data, dtype=np.int16)
                             audio_float = audio_array.astype(np.float32) / 32768.0
-                        
-                        # Save as temporary file
                         temp_path = audio_path + "_numpy_temp.wav"
                         with wave.open(temp_path, 'wb') as temp_wav:
                             temp_wav.setnchannels(1)
                             temp_wav.setsampwidth(2)
                             temp_wav.setframerate(sample_rate)
                             temp_wav.writeframes(audio_float.tobytes())
-                        
                         result = self.model.transcribe(
                             temp_path,
                             fp16=False,
@@ -158,21 +132,17 @@ class AudioAnalyzer:
                             condition_on_previous_text=False,
                             temperature=0.0
                         )
-                        
-                        # Clean up
                         try:
                             os.remove(temp_path)
                         except:
                             pass
-                            
                     except Exception as numpy_error:
                         logger.error(f"All audio loading methods failed: {numpy_error}")
                         raise Exception("Could not load audio file with any available method")
-            
             processing_time = time.time() - start_time
-            
             logger.info(f"Transcription completed in {processing_time:.2f} seconds using {self.model_size} model")
-            return result["text"].strip(), processing_time
+            # Return both text and segments
+            return result["text"].strip(), processing_time, result.get("segments", [])
         except Exception as e:
             logger.error(f"Error transcribing audio: {e}")
             raise
@@ -243,36 +213,23 @@ class AudioAnalyzer:
         return comparisons
     
     def analyze_audio_accuracy(self, script_path: str, audio_path: str) -> Dict:
-        """Main analysis function with performance optimizations"""
+        """Main analysis function with performance optimizations and segment support"""
         try:
-            # Get file info for estimation
             file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
             duration = self.get_audio_duration(audio_path)
             estimated_time = self.estimate_processing_time(audio_path)
-            
             logger.info(f"Starting analysis: {file_size:.1f}MB, {duration:.1f}s, estimated time: {estimated_time:.1f}s")
-            
-            # Extract script text
             script_text = self.extract_text_from_docx(script_path)
             script_words = self.preprocess_text(script_text)
-            
-            # Transcribe audio
-            transcribed_text, processing_time = self.transcribe_audio(audio_path)
+            transcribed_text, processing_time, segments = self.transcribe_audio(audio_path)
             audio_words = self.preprocess_text(transcribed_text)
-            
-            # Align and compare texts
             comparisons = self.align_texts(script_words, audio_words)
-            
-            # Calculate statistics
             total_words = len(script_words)
             correct_words = sum(1 for comp in comparisons if comp['is_correct'])
             missing_words = sum(1 for comp in comparisons if comp['error_type'] == 'missing')
             wrong_words = sum(1 for comp in comparisons if comp['error_type'] == 'wrong')
-            
             accuracy_score = (correct_words / total_words * 100) if total_words > 0 else 0
-            
             logger.info(f"Analysis completed: {accuracy_score:.1f}% accuracy, {processing_time:.1f}s actual time")
-            
             return {
                 'script_text': script_text,
                 'transcribed_text': transcribed_text,
@@ -283,6 +240,7 @@ class AudioAnalyzer:
                     'estimated_time': estimated_time
                 },
                 'comparisons': comparisons,
+                'segments': segments,
                 'statistics': {
                     'total_words': total_words,
                     'correct_words': correct_words,
@@ -291,7 +249,6 @@ class AudioAnalyzer:
                     'accuracy_score': accuracy_score
                 }
             }
-            
         except Exception as e:
             logger.error(f"Error in audio analysis: {e}")
             raise
@@ -339,7 +296,7 @@ class AudioAnalyzer:
                     audio_result.append(f'<span class="extra-word">{audio_words[idx]}</span>')
         return ' '.join(script_result), ' '.join(audio_result)
 
-    def compare_paragraphs(self, script_text: str, audio_text: str, script_path: str = None, force_single_paragraph: bool = False) -> list:
+    def compare_paragraphs(self, script_text: str, audio_text: str, script_path: str = None, force_single_paragraph: bool = False, segments=None) -> list:
         import difflib
         if force_single_paragraph:
             script_paragraphs = [script_text.strip()] if script_text.strip() else []
@@ -358,31 +315,40 @@ class AudioAnalyzer:
         opcodes = matcher.get_opcodes()
         results = []
         for tag, i1, i2, j1, j2 in opcodes:
-            if tag == 'equal':
-                for idx in range(i2 - i1):
-                    s_para = script_paragraphs[i1 + idx]
-                    a_para = audio_paragraphs[j1 + idx]
-                    highlighted_script, highlighted_audio = self.highlight_differences(s_para, a_para)
-                    results.append({
-                        'script_paragraph': highlighted_script,
-                        'audio_paragraph': highlighted_audio,
-                        'similarity': 100,
-                        'status': 'Correct',
-                        'index': i1 + idx
-                    })
-            elif tag == 'replace' or tag == 'delete' or tag == 'insert':
-                for idx in range(max(i2 - i1, j2 - j1)):
-                    s_para = script_paragraphs[i1 + idx] if i1 + idx < i2 else ''
-                    a_para = audio_paragraphs[j1 + idx] if j1 + idx < j2 else ''
-                    similarity = self.calculate_similarity(s_para, a_para) if s_para and a_para else 0
-                    highlighted_script, highlighted_audio = self.highlight_differences(s_para, a_para)
-                    results.append({
-                        'script_paragraph': highlighted_script,
-                        'audio_paragraph': highlighted_audio,
-                        'similarity': similarity,
-                        'status': 'Wrong' if s_para and a_para else ('Missing' if s_para else 'Extra'),
-                        'index': i1 + idx
-                    })
+            for idx in range(max(i2 - i1, j2 - j1)):
+                s_para = script_paragraphs[i1 + idx] if i1 + idx < i2 else ''
+                a_para = audio_paragraphs[j1 + idx] if j1 + idx < j2 else ''
+                similarity = self.calculate_similarity(s_para, a_para) if s_para and a_para else 0
+                highlighted_script, highlighted_audio = self.highlight_differences(s_para, a_para)
+                # Match segments to audio paragraph (a_para)
+                para_start, para_end = None, None
+                if segments and a_para:
+                    para_words = set(a_para.lower().split())
+                    matched_segments = []
+                    for seg in segments:
+                        seg_words = set(seg['text'].lower().split())
+                        if para_words & seg_words:
+                            matched_segments.append(seg)
+                    if matched_segments:
+                        para_start = min(seg['start'] for seg in matched_segments)
+                        para_end = max(seg['end'] for seg in matched_segments)
+                results.append({
+                    'script_paragraph': highlighted_script,
+                    'audio_paragraph': highlighted_audio,
+                    'similarity': similarity if tag != 'equal' else 100,
+                    'status': 'Correct' if tag == 'equal' else ('Wrong' if s_para and a_para else ('Missing' if s_para else 'Extra')),
+                    'index': i1 + idx,
+                    'start': para_start,
+                    'end': para_end
+                })
         logger.error(f"[DEBUG] Paragraph comparison results: {results}")
         print(f"[DEBUG] Paragraph comparison results: {results}")
+        if segments and audio_paragraphs:
+            logger.error(f"[DEBUG] First audio paragraph: {audio_paragraphs[0]}")
+            logger.error(f"[DEBUG] First 3 segment texts: {[seg['text'] for seg in segments[:3]]}")
+            para_words = set(audio_paragraphs[0].lower().split())
+            for i, seg in enumerate(segments[:3]):
+                seg_words = set(seg['text'].lower().split())
+                overlap = para_words & seg_words
+                logger.error(f"[DEBUG] Segment {i} overlap: {overlap}")
         return results 

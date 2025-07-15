@@ -34,6 +34,9 @@
             <div class="mb-3">
                 <a href="?mode=word" class="btn btn-outline-primary {% if mode == 'word' %}active{% endif %}">Word-by-Word</a>
                 <a href="?mode=paragraph" class="btn btn-outline-secondary {% if mode == 'paragraph' %}active{% endif %}">Paragraph-by-Paragraph</a>
+                <a href="{% url 'audio_checker:transcript_segments' analysis.id %}" class="btn btn-outline-info">
+                    <i class="fas fa-clock me-2"></i>View Timestamped Transcript
+                </a>
             </div>
         </div>
     </div>
@@ -145,6 +148,35 @@
 
         <!-- Word-by-Word Comparison -->
         {% if mode == 'word' %}
+        {% if segments %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Transcript with Timestamps</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-bordered">
+                        <thead>
+                            <tr>
+                                <th style="width: 120px;">Start</th>
+                                <th style="width: 120px;">End</th>
+                                <th>Text</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for seg in segments %}
+                            <tr>
+                                <td>[{{ seg.start|floatformat:3 }}]</td>
+                                <td>[{{ seg.end|floatformat:3 }}]</td>
+                                <td>{{ seg.text }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0">
@@ -251,6 +283,8 @@
                         <thead>
                             <tr>
                                 <th>#</th>
+                                <th>Start</th>
+                                <th>End</th>
                                 <th>Script Paragraph</th>
                                 <th>Audio Paragraph</th>
                                 <th>Status</th>
@@ -261,6 +295,8 @@
                             {% for para in paragraph_results %}
                             <tr>
                                 <td>{{ para.index }}</td>
+                                <td>{% if para.start %}[{{ para.start|floatformat:2 }}]{% else %}-{% endif %}</td>
+                                <td>{% if para.end %}[{{ para.end|floatformat:2 }}]{% else %}-{% endif %}</td>
                                 <td style="max-width: 300px; white-space: pre-wrap;">{{ para.script_paragraph|safe }}</td>
                                 <td style="max-width: 300px; white-space: pre-wrap;">{{ para.audio_paragraph|safe }}</td>
                                 <td>

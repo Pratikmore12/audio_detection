@@ -1,0 +1,368 @@
+{% extends 'audio_checker/base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}Batch Upload - Audio Accuracy Checker{% endblock %}
+
+{% block extra_css %}
+<style>
+    .file-pair-container {
+        border: 2px dashed #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        background-color: #f8f9fa;
+        transition: all 0.3s ease;
+    }
+    
+    .file-pair-container:hover {
+        border-color: #007bff;
+        background-color: #e3f2fd;
+    }
+    
+    .file-pair-container.uploaded {
+        border-color: #28a745;
+        background-color: #d4edda;
+    }
+    
+    .file-pair-container.error {
+        border-color: #dc3545;
+        background-color: #f8d7da;
+    }
+    
+    .file-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 10px;
+        background-color: white;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+    }
+    
+    .file-info i {
+        color: #28a745;
+    }
+    
+    .file-info.error i {
+        color: #dc3545;
+    }
+    
+    .remove-pair {
+        color: #dc3545;
+        cursor: pointer;
+        font-size: 1.2em;
+    }
+    
+    .remove-pair:hover {
+        color: #c82333;
+    }
+    
+    .add-pair-btn {
+        width: 100%;
+        padding: 20px;
+        border: 2px dashed #007bff;
+        background-color: #f8f9fa;
+        color: #007bff;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .add-pair-btn:hover {
+        background-color: #007bff;
+        color: white;
+    }
+    
+    .progress-container {
+        margin-top: 20px;
+    }
+    
+    .file-pair-counter {
+        background-color: #007bff;
+        color: white;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: bold;
+        margin-right: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-lg-8 mx-auto">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="mb-0">
+                        <i class="fas fa-upload me-2"></i>Batch Upload
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-4">
+                        Upload multiple script-audio file pairs for batch analysis. 
+                        Each pair will be processed individually and you can track the progress.
+                    </p>
+                    
+                    <form method="post" id="batch-form">
+                        {% csrf_token %}
+                        
+                        <!-- Batch Information -->
+                        <div class="mb-4">
+                            <h5>Batch Information</h5>
+                            {{ batch_form|crispy }}
+                        </div>
+                        
+                        <!-- File Pairs Section -->
+                        <div class="mb-4">
+                            <h5>Script-Audio File Pairs</h5>
+                            <p class="text-muted small">
+                                Add script and audio files in pairs. Each script must have a corresponding audio file.
+                            </p>
+                            
+                            <div id="file-pairs-container">
+                                <!-- File pairs will be added here dynamically -->
+                            </div>
+                            
+                            <button type="button" class="btn btn-outline-primary add-pair-btn" id="add-pair-btn">
+                                <i class="fas fa-plus me-2"></i>Add Another Script-Audio Pair
+                            </button>
+                        </div>
+                        
+                        <!-- Hidden input for storing file data -->
+                        <input type="hidden" name="files_data" id="files-data" value="">
+                        
+                        <!-- Submit Button -->
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg" id="submit-btn" disabled>
+                                <i class="fas fa-play me-2"></i>Start Batch Analysis
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- File Pair Template -->
+<template id="file-pair-template">
+    <div class="file-pair-container" data-pair-id="">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0">
+                <span class="file-pair-counter"></span>
+                Script-Audio Pair
+            </h6>
+            <button type="button" class="btn btn-sm btn-outline-danger remove-pair">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <label class="form-label">Title</label>
+                <input type="text" class="form-control pair-title" placeholder="Enter title for this pair" required>
+            </div>
+        </div>
+        
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <label class="form-label">Script File (DOCX/DOC)</label>
+                <input type="file" class="form-control pair-script" accept=".docx,.doc" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Audio File (WAV/MP3/M4A/FLAC)</label>
+                <input type="file" class="form-control pair-audio" accept=".wav,.mp3,.m4a,.flac" required>
+            </div>
+        </div>
+        
+        <div class="file-info" style="display: none;">
+            <i class="fas fa-check-circle"></i>
+            <span class="file-info-text"></span>
+        </div>
+    </div>
+</template>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let pairCounter = 0;
+let uploadedFiles = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    const addPairBtn = document.getElementById('add-pair-btn');
+    const container = document.getElementById('file-pairs-container');
+    const template = document.getElementById('file-pair-template');
+    const submitBtn = document.getElementById('submit-btn');
+    const filesDataInput = document.getElementById('files-data');
+    
+    // Add first pair automatically
+    addFilePair();
+    
+    addPairBtn.addEventListener('click', addFilePair);
+    
+    function addFilePair() {
+        pairCounter++;
+        const clone = template.content.cloneNode(true);
+        const pairContainer = clone.querySelector('.file-pair-container');
+        const counter = clone.querySelector('.file-pair-counter');
+        const removeBtn = clone.querySelector('.remove-pair');
+        const titleInput = clone.querySelector('.pair-title');
+        const scriptInput = clone.querySelector('.pair-script');
+        const audioInput = clone.querySelector('.pair-audio');
+        const fileInfo = clone.querySelector('.file-info');
+        const fileInfoText = clone.querySelector('.file-info-text');
+        
+        pairContainer.dataset.pairId = pairCounter;
+        counter.textContent = pairCounter;
+        
+        // Handle file uploads
+        function handleFileUpload() {
+            const title = titleInput.value.trim();
+            const scriptFile = scriptInput.files[0];
+            const audioFile = audioInput.files[0];
+            
+            if (title && scriptFile && audioFile) {
+                // Validate file types
+                const scriptValid = scriptFile.name.match(/\.(docx|doc)$/i);
+                const audioValid = audioFile.name.match(/\.(wav|mp3|m4a|flac)$/i);
+                
+                if (!scriptValid) {
+                    showFileInfo(pairContainer, fileInfo, fileInfoText, 'Invalid script file format', 'error');
+                    return;
+                }
+                
+                if (!audioValid) {
+                    showFileInfo(pairContainer, fileInfo, fileInfoText, 'Invalid audio file format', 'error');
+                    return;
+                }
+                
+                // Store file data
+                const fileData = {
+                    title: title,
+                    script_file: scriptFile.name,
+                    audio_file: audioFile.name,
+                    script_file_obj: scriptFile,
+                    audio_file_obj: audioFile
+                };
+                
+                uploadedFiles[pairCounter] = fileData;
+                showFileInfo(pairContainer, fileInfo, fileInfoText, 
+                    `✓ ${scriptFile.name} + ${audioFile.name}`, 'success');
+                updateSubmitButton();
+            } else {
+                hideFileInfo(fileInfo);
+                delete uploadedFiles[pairCounter];
+                updateSubmitButton();
+            }
+        }
+        
+        titleInput.addEventListener('input', handleFileUpload);
+        scriptInput.addEventListener('change', handleFileUpload);
+        audioInput.addEventListener('change', handleFileUpload);
+        
+        // Handle remove button
+        removeBtn.addEventListener('click', function() {
+            delete uploadedFiles[pairCounter];
+            pairContainer.remove();
+            updateSubmitButton();
+            updatePairCounters();
+        });
+        
+        container.appendChild(clone);
+    }
+    
+    function showFileInfo(container, fileInfo, fileInfoText, message, type) {
+        fileInfoText.textContent = message;
+        fileInfo.style.display = 'flex';
+        container.classList.remove('uploaded', 'error');
+        container.classList.add(type === 'success' ? 'uploaded' : 'error');
+        fileInfo.classList.remove('error');
+        if (type === 'error') {
+            fileInfo.classList.add('error');
+        }
+    }
+    
+    function hideFileInfo(fileInfo) {
+        fileInfo.style.display = 'none';
+    }
+    
+    function updateSubmitButton() {
+        const hasFiles = Object.keys(uploadedFiles).length > 0;
+        submitBtn.disabled = !hasFiles;
+    }
+    
+    function updatePairCounters() {
+        const pairs = container.querySelectorAll('.file-pair-container');
+        pairs.forEach((pair, index) => {
+            const counter = pair.querySelector('.file-pair-counter');
+            counter.textContent = index + 1;
+        });
+    }
+    
+    // Handle form submission
+    document.getElementById('batch-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        console.log('Form submission started');
+        console.log('uploadedFiles:', uploadedFiles);
+        
+        // Prepare files data for submission
+        const filesData = [];
+        for (let pairId in uploadedFiles) {
+            const fileData = uploadedFiles[pairId];
+            filesData.push(JSON.stringify({
+                title: fileData.title,
+                pair_id: pairId
+            }));
+        }
+        
+        filesDataInput.value = JSON.stringify(filesData);
+        console.log('files_data value:', filesDataInput.value);
+        
+        // Create FormData
+        const formData = new FormData(this);
+        
+        // Add files to FormData
+        for (let pairId in uploadedFiles) {
+            const fileData = uploadedFiles[pairId];
+            console.log(`Adding files for pair ${pairId}:`, fileData.script_file_obj, fileData.audio_file_obj);
+            formData.append(`script_file_${pairId}`, fileData.script_file_obj);
+            formData.append(`audio_file_${pairId}`, fileData.audio_file_obj);
+        }
+        
+        // Log all FormData entries
+        console.log('FormData entries:');
+        for (let [key, value] of formData.entries()) {
+            console.log(key, value);
+        }
+        
+        // Submit form using fetch instead of form submit
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            }
+        })
+        .then(response => {
+            if (response.redirected) {
+                window.location.href = response.url;
+            } else {
+                return response.text();
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error submitting form: ' + error.message);
+        });
+    });
+});
+</script>
+{% endblock %} 

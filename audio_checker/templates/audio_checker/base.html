@@ -89,8 +89,18 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="{% url 'audio_checker:batch_upload' %}">
+                            <i class="fas fa-layer-group me-1"></i>Batch Upload
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'audio_checker:batch_list' %}">
+                            <i class="fas fa-list me-1"></i>Batches
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="{% url 'audio_checker:analysis_list' %}">
-                            <i class="fas fa-list me-1"></i>Analyses
+                            <i class="fas fa-chart-bar me-1"></i>Analyses
                         </a>
                     </li>
                 </ul>

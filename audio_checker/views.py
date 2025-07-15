@@ -11,9 +11,10 @@ import logging
 from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import json
 
-from .models import AudioAnalysis, WordComparison, AnalysisResult
-from .forms import AudioAnalysisForm
+from .models import AudioAnalysis, WordComparison, AnalysisResult, BatchUpload
+from .forms import AudioAnalysisForm, BatchUploadForm
 from .services import AudioAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -42,19 +43,23 @@ def home(request):
 
 def run_analysis_with_timeout(analysis_id):
     """Background task to run audio analysis with timeout and better error handling"""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f'[BATCH DEBUG] Starting analysis for ID {analysis_id}')
     try:
         analysis = AudioAnalysis.objects.get(id=analysis_id)
+        logger.info(f'[BATCH DEBUG] Loaded analysis: {analysis}')
         
         # Choose model size based on file size
         file_size = analysis.audio_file.size / (1024 * 1024)  # MB
+        logger.info(f'[BATCH DEBUG] Audio file size: {file_size:.2f} MB')
         if file_size > 50:
             model_size = 'tiny'  # Use tiny model for large files
         elif file_size > 20:
             model_size = 'base'  # Use base model for medium files
         else:
             model_size = 'small'  # Use small model for small files
-            
-        logger.info(f"Starting analysis {analysis_id} with {model_size} model for {file_size:.1f}MB file")
+        logger.info(f'[BATCH DEBUG] Using model size: {model_size}')
         
         # Set a timeout for the entire analysis (30 minutes max)
         start_time = time.time()
@@ -66,24 +71,24 @@ def run_analysis_with_timeout(analysis_id):
             # Get file paths
             script_path = analysis.script_file.path
             audio_path = analysis.audio_file.path
-            
-            # EXTRA LOGGING
-            logger.error(f"[DEBUG] Script path: {script_path} Exists: {os.path.exists(script_path)}")
-            logger.error(f"[DEBUG] Audio path: {audio_path} Exists: {os.path.exists(audio_path)}")
-            print(f"[DEBUG] Script path: {script_path} Exists: {os.path.exists(script_path)}")
-            print(f"[DEBUG] Audio path: {audio_path} Exists: {os.path.exists(audio_path)}")
+            logger.info(f'[BATCH DEBUG] Script path: {script_path}, Audio path: {audio_path}')
+            logger.info(f'[BATCH DEBUG] Script exists: {os.path.exists(script_path)}, Audio exists: {os.path.exists(audio_path)}')
             
             # Check if files exist
             if not os.path.exists(script_path):
+                logger.error(f'[BATCH DEBUG] Script file not found: {script_path}')
                 raise FileNotFoundError(f"Script file not found: {script_path}")
             if not os.path.exists(audio_path):
+                logger.error(f'[BATCH DEBUG] Audio file not found: {audio_path}')
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
             # Run analysis
             result = analyzer.analyze_audio_accuracy(script_path, audio_path)
+            logger.info(f'[BATCH DEBUG] Analysis result: {result}')
             
             # Check timeout
             if time.time() - start_time > timeout:
+                logger.error('[BATCH DEBUG] Analysis timed out')
                 raise TimeoutError("Analysis timed out after 30 minutes")
             
             # Update analysis with results
@@ -93,23 +98,31 @@ def run_analysis_with_timeout(analysis_id):
             analysis.missing_words = result['statistics']['missing_words']
             analysis.wrong_words = result['statistics']['wrong_words']
             analysis.save()
+            logger.info(f'[BATCH DEBUG] Analysis updated with results')
             
-            # Create detailed result
-            analysis_result, created = AnalysisResult.objects.get_or_create(
-                analysis=analysis,
-                defaults={
-                    'transcribed_text': result['transcribed_text'],
-                    'script_text': result['script_text'],
-                    'processing_time': result['processing_time'],
-                    'whisper_model_used': analyzer.model_size
-                }
-            )
-            
-            if not created:
-                analysis_result.transcribed_text = result['transcribed_text']
-                analysis_result.script_text = result['script_text']
-                analysis_result.processing_time = result['processing_time']
-                analysis_result.save()
+            # Create detailed result with better error handling
+            try:
+                analysis_result, created = AnalysisResult.objects.get_or_create(
+                    analysis=analysis,
+                    defaults={
+                        'transcribed_text': result['transcribed_text'],
+                        'script_text': result['script_text'],
+                        'processing_time': result['processing_time'],
+                        'whisper_model_used': analyzer.model_size,
+                        'segments': result.get('segments', None),
+                    }
+                )
+
+                if not created:
+                    analysis_result.transcribed_text = result['transcribed_text']
+                    analysis_result.script_text = result['script_text']
+                    analysis_result.processing_time = result['processing_time']
+                    analysis_result.segments = result.get('segments', None)
+                    analysis_result.save()
+                logger.info(f'[BATCH DEBUG] AnalysisResult saved for analysis {analysis_id}')
+            except Exception as e:
+                logger.error(f"[BATCH DEBUG] Failed to save AnalysisResult for analysis {analysis_id}: {e}")
+                raise Exception(f"Failed to save analysis results: {e}")
             
             # Create word comparisons
             WordComparison.objects.filter(analysis=analysis).delete()
@@ -123,23 +136,33 @@ def run_analysis_with_timeout(analysis_id):
                     similarity_score=comp['similarity_score'],
                     error_type=comp['error_type']
                 )
+            logger.info(f'[BATCH DEBUG] Word comparisons created for analysis {analysis_id}')
             
-            logger.info(f"Analysis {analysis_id} completed successfully in {time.time() - start_time:.1f} seconds")
+            # Verify AnalysisResult exists before cleanup
+            try:
+                verification_result = AnalysisResult.objects.get(analysis=analysis)
+                if not verification_result.transcribed_text or not verification_result.script_text:
+                    logger.error(f"[BATCH DEBUG] AnalysisResult for analysis {analysis_id} is incomplete - skipping cleanup")
+                    raise Exception("AnalysisResult is incomplete")
+                logger.info(f"[BATCH DEBUG] AnalysisResult verification passed for analysis {analysis_id}")
+            except AnalysisResult.DoesNotExist:
+                logger.error(f"[BATCH DEBUG] AnalysisResult not found for analysis {analysis_id} - skipping cleanup")
+                raise Exception("AnalysisResult not found")
             
-            # Clean up files after successful analysis
+            # Only clean up files after AnalysisResult is successfully saved and verified
             cleanup_analysis_files(analysis)
-            
+            logger.info(f'[BATCH DEBUG] Cleanup complete for analysis {analysis_id}')
         except Exception as e:
-            logger.error(f"Error in analysis {analysis_id}: {e}")
+            logger.error(f"[BATCH DEBUG] Error in analysis {analysis_id}: {e}")
             # Mark analysis as failed
             analysis.accuracy_score = -1  # Use -1 to indicate failure
             analysis.save()
             raise
-            
+        
     except AudioAnalysis.DoesNotExist:
-        logger.error(f"Analysis {analysis_id} not found")
+        logger.error(f"[BATCH DEBUG] Analysis {analysis_id} not found")
     except Exception as e:
-        logger.error(f"Critical error in analysis {analysis_id}: {e}")
+        logger.error(f"[BATCH DEBUG] Critical error in analysis {analysis_id}: {e}")
 
 def run_analysis(analysis_id):
     """Legacy function - now calls the timeout version"""
@@ -149,9 +172,16 @@ def analysis_detail(request, analysis_id):
     print("[DEBUG] analysis_detail called")
     analysis = get_object_or_404(AudioAnalysis, id=analysis_id)
     result = None
+    segments = []
     try:
-        result = analysis.analysisresult
+        result = analysis.detailed_result
         print(f"[DEBUG] AnalysisResult found: {result}")
+        # Try to load segments from a JSONField if you add it, or fallback to re-transcribe if needed
+        if hasattr(result, 'segments') and result.segments:
+            segments = result.segments
+        else:
+            # Optionally, you could re-run the analyzer here to get segments if not stored
+            pass
     except Exception as e:
         print(f"[DEBUG] No AnalysisResult: {e}")
     mode = request.GET.get('mode', 'word')
@@ -167,15 +197,12 @@ def analysis_detail(request, analysis_id):
             comparisons = analysis.word_comparisons.all()
             script_text = ' '.join([c.script_word for c in comparisons if c.script_word])
             audio_text = ' '.join([c.audio_word for c in comparisons if c.audio_word])
-        # Treat both as one paragraph
-        paragraph_results = analyzer.compare_paragraphs(script_text, audio_text, script_path=None, force_single_paragraph=True)
-    # Check if analysis failed
+        paragraph_results = analyzer.compare_paragraphs(script_text, audio_text, script_path=None, force_single_paragraph=True, segments=segments)
     if analysis.accuracy_score == -1:
         messages.error(request, 'Analysis failed. Please try again with a smaller file or different format.')
         return redirect('audio_checker:home')
-    # Get word comparisons with pagination
     comparisons = analysis.word_comparisons.all()
-    paginator = Paginator(comparisons, 50)  # 50 words per page
+    paginator = Paginator(comparisons, 50)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
     context = {
@@ -184,6 +211,7 @@ def analysis_detail(request, analysis_id):
         'comparisons': page_obj,
         'mode': mode,
         'paragraph_results': paragraph_results,
+        'segments': segments,
     }
     return render(request, 'audio_checker/analysis_detail.html', context)
 
@@ -259,7 +287,7 @@ def download_transcript_docx(request, analysis_id):
         transcribed_text = ""
         try:
             # Try to get from AnalysisResult first
-            result = analysis.analysisresult
+            result = analysis.detailed_result
             transcribed_text = result.transcribed_text
         except:
             # Fallback: reconstruct from word comparisons
@@ -314,21 +342,205 @@ def download_transcript_docx(request, analysis_id):
         messages.error(request, 'Error creating transcript file. Please try again.')
         return redirect('audio_checker:analysis_detail', analysis_id=analysis_id)
 
-def cleanup_analysis_files(analysis):
-    """Delete audio and script files after successful analysis to save storage space"""
+def transcript_segments_view(request, analysis_id):
+    import json
+    from .services import AudioAnalyzer
+    analysis = get_object_or_404(AudioAnalysis, id=analysis_id)
+    result = None
+    segments = []
+    warning = None
+    
+    # First try to get segments from AnalysisResult
     try:
-        # Delete audio file
-        if analysis.audio_file and os.path.exists(analysis.audio_file.path):
-            os.remove(analysis.audio_file.path)
-            logger.info(f"Deleted audio file: {analysis.audio_file.path}")
-        
-        # Delete script file
+        result = analysis.detailed_result
+        if hasattr(result, 'segments') and result.segments:
+            segments = result.segments
+            if isinstance(segments, str):
+                segments = json.loads(segments)
+    except Exception as e:
+        pass
+    
+    # Fallback: if segments are missing, try to re-run transcription
+    if not segments:
+        try:
+            # Check if audio file exists
+            if not analysis.audio_file or not os.path.exists(analysis.audio_file.path):
+                warning = f"Audio file not found: {analysis.audio_file.name if analysis.audio_file else 'No file'}. Cannot regenerate segments."
+            else:
+                analyzer = AudioAnalyzer()
+                audio_path = analysis.audio_file.path
+                _, _, segments = analyzer.transcribe_audio(audio_path)
+                warning = "Segments were missing and have been regenerated. This may take extra time."
+        except Exception as e:
+            warning = f"Could not regenerate segments: {e}"
+    
+    print("Segments in view:", segments)
+    context = {
+        'analysis': analysis,
+        'segments': segments,
+        'warning': warning,
+    }
+    return render(request, 'audio_checker/transcript_segments.html', context)
+
+def cleanup_analysis_files(analysis):
+    """Clean up uploaded files after analysis is complete"""
+    try:
         if analysis.script_file and os.path.exists(analysis.script_file.path):
             os.remove(analysis.script_file.path)
-            logger.info(f"Deleted script file: {analysis.script_file.path}")
-            
-        logger.info(f"File cleanup completed for analysis {analysis.id}")
-        
+        if analysis.audio_file and os.path.exists(analysis.audio_file.path):
+            os.remove(analysis.audio_file.path)
+        logger.info(f"Cleaned up files for analysis {analysis.id}")
     except Exception as e:
-        logger.error(f"Error during file cleanup for analysis {analysis.id}: {e}")
-        # Don't raise the exception - cleanup failure shouldn't affect the analysis result
+        logger.error(f"Error cleaning up files for analysis {analysis.id}: {e}")
+
+# New batch upload views
+def batch_upload(request):
+    """Handle batch upload of multiple script-audio pairs"""
+    import logging
+    logger = logging.getLogger(__name__)
+    if request.method == 'POST':
+        print("=== BATCH UPLOAD DEBUG ===")
+        print(f"POST data keys: {list(request.POST.keys())}")
+        print(f"FILES data keys: {list(request.FILES.keys())}")
+        logger.info('Batch upload POST received')
+        batch_form = BatchUploadForm(request.POST)
+        if batch_form.is_valid():
+            print("Batch form is valid")
+            logger.info('Batch form is valid')
+            batch = batch_form.save(commit=False)
+            if request.user.is_authenticated:
+                batch.user = request.user
+            batch.save()
+            print(f"Batch created: {batch}")
+            logger.info(f'Batch created: {batch}')
+            
+            # Process the uploaded files
+            files_data = request.POST.get('files_data')
+            print(f"files_data raw: {files_data}")
+            logger.info(f'files_data raw: {files_data}')
+            if files_data:
+                try:
+                    files_list = json.loads(files_data)
+                    print(f"files_list parsed: {files_list}")
+                    logger.info(f'files_list parsed: {files_list}')
+                    for file_data in files_list:
+                        if file_data.strip():
+                            try:
+                                data = json.loads(file_data)
+                                title = data.get('title', 'Untitled Analysis')
+                                pair_id = data.get('pair_id', '1')
+                                logger.info(f'Processing pair_id={pair_id}, title={title}')
+                                
+                                # Get the actual file objects from request.FILES
+                                script_file_key = f"script_file_{pair_id}"
+                                audio_file_key = f"audio_file_{pair_id}"
+                                logger.info(f'Looking for files: {script_file_key}, {audio_file_key}')
+                                script_file = request.FILES.get(script_file_key)
+                                audio_file = request.FILES.get(audio_file_key)
+                                logger.info(f'Got script_file: {script_file}, audio_file: {audio_file}')
+                                
+                                if script_file and audio_file:
+                                    print(f"Creating AudioAnalysis for pair_id={pair_id}")
+                                    analysis = AudioAnalysis.objects.create(
+                                        title=title,
+                                        script_file=script_file,
+                                        audio_file=audio_file,
+                                        user=request.user if request.user.is_authenticated else None,
+                                        batch=batch
+                                    )
+                                    print(f"Created AudioAnalysis: {analysis}")
+                                    logger.info(f'Created AudioAnalysis: {analysis}')
+                                    
+                                    # Start analysis in background
+                                    thread = threading.Thread(target=run_analysis_with_timeout, args=(analysis.id,))
+                                    thread.daemon = True
+                                    thread.start()
+                                    print(f"Started analysis thread for {analysis.id}")
+                                    logger.info(f'Started analysis thread for {analysis.id}')
+                                else:
+                                    print(f"Missing files for pair_id={pair_id}")
+                                    logger.error(f'Missing files for pair_id={pair_id}')
+                            except Exception as e:
+                                logger.error(f"Error processing file pair: {e}")
+                                continue
+                except json.JSONDecodeError:
+                    logger.error("Invalid JSON in files_data")
+            else:
+                logger.error('No files_data found in POST')
+            
+            messages.success(request, f'Batch upload "{batch.title}" created with {batch.get_total_analyses()} analyses!')
+            return redirect('audio_checker:batch_detail', batch_id=batch.id)
+        else:
+            logger.error('Batch form is invalid')
+    else:
+        batch_form = BatchUploadForm()
+    
+    return render(request, 'audio_checker/batch_upload.html', {'batch_form': batch_form})
+
+def batch_detail(request, batch_id):
+    """Show details of a batch upload"""
+    batch = get_object_or_404(BatchUpload, id=batch_id)
+    analyses = batch.analyses.all().order_by('-created_at')
+    
+    # Update batch status based on analyses
+    total = batch.get_total_analyses()
+    completed = batch.get_completed_analyses()
+    failed = batch.get_failed_analyses()
+    
+    if total == 0:
+        batch.status = 'pending'
+    elif completed + failed == total:
+        batch.status = 'completed' if failed == 0 else 'failed'
+    else:
+        batch.status = 'processing'
+    batch.save()
+    
+    context = {
+        'batch': batch,
+        'analyses': analyses,
+        'total': total,
+        'completed': completed,
+        'failed': failed,
+        'pending': total - completed - failed
+    }
+    return render(request, 'audio_checker/batch_detail.html', context)
+
+def batch_list(request):
+    """List all batch uploads"""
+    batches = BatchUpload.objects.all().order_by('-created_at')
+    paginator = Paginator(batches, 10)
+    page_number = request.GET.get('page')
+    page_obj = paginator.get_page(page_number)
+    
+    return render(request, 'audio_checker/batch_list.html', {'page_obj': page_obj})
+
+@csrf_exempt
+def upload_file_pair(request):
+    """AJAX endpoint to handle individual file pair uploads"""
+    if request.method == 'POST':
+        try:
+            title = request.POST.get('title')
+            script_file = request.FILES.get('script_file')
+            audio_file = request.FILES.get('audio_file')
+            
+            if not all([title, script_file, audio_file]):
+                return JsonResponse({'error': 'All fields are required'}, status=400)
+            
+            # Validate file types
+            if not script_file.name.endswith(('.docx', '.doc')):
+                return JsonResponse({'error': 'Invalid script file format'}, status=400)
+            
+            if not audio_file.name.endswith(('.wav', '.mp3', '.m4a', '.flac')):
+                return JsonResponse({'error': 'Invalid audio file format'}, status=400)
+            
+            return JsonResponse({
+                'success': True,
+                'title': title,
+                'script_file': script_file.name,
+                'audio_file': audio_file.name
+            })
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Invalid request method'}, status=405)

@@ -1,0 +1,172 @@
+{% extends 'audio_checker/base.html' %}
+
+{% block title %}Batch Detail - {{ batch.title }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-lg-10 mx-auto">
+            <!-- Batch Header -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h3 class="mb-0">
+                            <i class="fas fa-layer-group me-2"></i>{{ batch.title }}
+                        </h3>
+                        <span class="badge bg-light text-dark fs-6">
+                            {{ batch.status|title }}
+                        </span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-primary">{{ total }}</h4>
+                                <p class="text-muted mb-0">Total Files</p>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-success">{{ completed }}</h4>
+                                <p class="text-muted mb-0">Completed</p>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-warning">{{ pending }}</h4>
+                                <p class="text-muted mb-0">Pending</p>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h4 class="text-danger">{{ failed }}</h4>
+                                <p class="text-muted mb-0">Failed</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Progress Bar -->
+                    {% if total > 0 %}
+                    <div class="mt-4">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Progress</span>
+                            <span>{{ completed|add:failed }}/{{ total }}</span>
+                        </div>
+                        <div class="progress" style="height: 10px;">
+                            <div class="progress-bar bg-success" role="progressbar" 
+                                 style="width: {% widthratio completed total 100 %}%"></div>
+                            <div class="progress-bar bg-danger" role="progressbar" 
+                                 style="width: {% widthratio failed total 100 %}%"></div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Analyses List -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="fas fa-list me-2"></i>Individual Analyses
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% if analyses %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Title</th>
+                                        <th>Status</th>
+                                        <th>Accuracy</th>
+                                        <th>Words</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for analysis in analyses %}
+                                    <tr>
+                                        <td>
+                                            <strong>{{ analysis.title }}</strong>
+                                        </td>
+                                        <td>
+                                            {% if analysis.accuracy_score is None %}
+                                                <span class="badge bg-warning">Processing</span>
+                                            {% elif analysis.accuracy_score == -1 %}
+                                                <span class="badge bg-danger">Failed</span>
+                                            {% else %}
+                                                <span class="badge bg-success">Completed</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if analysis.accuracy_score and analysis.accuracy_score != -1 %}
+                                                <span class="fw-bold text-{% if analysis.get_accuracy_percentage >= 80 %}success{% elif analysis.get_accuracy_percentage >= 60 %}warning{% else %}danger{% endif %}">
+                                                    {{ analysis.get_accuracy_percentage|floatformat:1 }}%
+                                                </span>
+                                            {% else %}
+                                                <span class="text-muted">-</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if analysis.total_words > 0 %}
+                                                {{ analysis.total_words }}
+                                            {% else %}
+                                                <span class="text-muted">-</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <small class="text-muted">
+                                                {{ analysis.created_at|date:"M d, Y H:i" }}
+                                            </small>
+                                        </td>
+                                        <td>
+                                            {% if analysis.accuracy_score and analysis.accuracy_score != -1 %}
+                                                <a href="{% url 'audio_checker:analysis_detail' analysis.id %}" 
+                                                   class="btn btn-sm btn-outline-primary">
+                                                    <i class="fas fa-eye"></i> View
+                                                </a>
+                                            {% else %}
+                                                <button class="btn btn-sm btn-outline-secondary" disabled>
+                                                    <i class="fas fa-clock"></i> Processing
+                                                </button>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-center py-4">
+                            <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                            <p class="text-muted">No analyses found in this batch.</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="mt-4 d-flex gap-2">
+                <a href="{% url 'audio_checker:batch_list' %}" class="btn btn-outline-secondary">
+                    <i class="fas fa-arrow-left me-2"></i>Back to Batches
+                </a>
+                <a href="{% url 'audio_checker:batch_upload' %}" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i>New Batch
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Auto-refresh for processing status -->
+{% if batch.status == 'processing' %}
+<script>
+    // Auto-refresh every 10 seconds if batch is still processing
+    setTimeout(function() {
+        location.reload();
+    }, 10000);
+</script>
+{% endif %}
+{% endblock %} 
